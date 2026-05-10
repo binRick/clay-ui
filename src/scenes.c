@@ -610,7 +610,7 @@ void Scene_Inventory(AppState *state) {
         // Equipment paper-doll column
         CLAY(CLAY_ID("INV_Equip"), {
             .layout = {
-                .sizing = { CLAY_SIZING_FIXED(290), CLAY_SIZING_GROW(0) },
+                .sizing = { CLAY_SIZING_FIXED(240), CLAY_SIZING_GROW(0) },
                 .padding = { 18, 18, 18, 18 },
                 .layoutDirection = CLAY_TOP_TO_BOTTOM,
                 .childGap = 8,
@@ -803,7 +803,7 @@ void Scene_Inventory(AppState *state) {
         const Item *detail = &INV_ITEMS[state->selectedInventoryItem];
         CLAY(CLAY_ID("INV_Detail"), {
             .layout = {
-                .sizing = { CLAY_SIZING_FIXED(320), CLAY_SIZING_GROW(0) },
+                .sizing = { CLAY_SIZING_FIXED(280), CLAY_SIZING_GROW(0) },
                 .padding = { 22, 22, 22, 22 },
                 .layoutDirection = CLAY_TOP_TO_BOTTOM,
                 .childGap = 14,
@@ -1121,7 +1121,7 @@ void Scene_Settings(AppState *state) {
                 Clay_ElementId tabId = CLAY_IDI("ST_Tab", t);
                 CLAY(tabId, {
                     .layout = {
-                        .sizing = { CLAY_SIZING_FIXED(160), CLAY_SIZING_FIXED(40) },
+                        .sizing = { CLAY_SIZING_GROW(.min = 110, .max = 180), CLAY_SIZING_FIXED(40) },
                         .childAlignment = { CLAY_ALIGN_X_CENTER, CLAY_ALIGN_Y_CENTER },
                     },
                     .backgroundColor = active ? COL_PANEL : (Clay_Hovered() ? COL_BG : COL_TRANSPARENT),

@@ -47,6 +47,7 @@ static void Layout(AppState *state) {
                     .sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_GROW(0) },
                     .layoutDirection = CLAY_TOP_TO_BOTTOM,
                 },
+                .clip = { .horizontal = true, .vertical = true },
             }) {
                 switch (state->scene) {
                     case SCENE_MAIN_MENU: Scene_MainMenu(state);  break;
@@ -86,6 +87,7 @@ int main(void) {
 
     Clay_Raylib_Initialize(1280, 800, "Clay Game Menus",
         FLAG_VSYNC_HINT | FLAG_WINDOW_RESIZABLE | FLAG_MSAA_4X_HINT | FLAG_WINDOW_HIGHDPI);
+    SetWindowMinSize(1024, 680);
 
     Clay_Initialize(clayMemory,
         (Clay_Dimensions){ (float)GetScreenWidth(), (float)GetScreenHeight() },
