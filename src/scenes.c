@@ -192,7 +192,7 @@ typedef struct {
     Clay_Color accent;
 } CharacterSlot;
 
-static const CharacterSlot CHARACTERS[] = {
+static const CharacterSlot CHARACTER_PRESETS[] = {
     {
         CLAY_STRING_CONST("BREA OF VARN"), CLAY_STRING_CONST("Rune Paladin"),
         14, 412, 480, 92, 160, 18, 11, 14, 17,
@@ -218,13 +218,463 @@ static const CharacterSlot CHARACTERS[] = {
         { 156, 220, 122, 255 },
     },
 };
-#define CHAR_COUNT ((int)(sizeof(CHARACTERS)/sizeof(CHARACTERS[0])))
+#define PRESET_COUNT    ((int)(sizeof(CHARACTER_PRESETS)/sizeof(CHARACTER_PRESETS[0])))
+#define MAX_CHARACTERS  16
+
+static CharacterSlot g_characters[MAX_CHARACTERS];
+static int           g_character_count = 0;
+static char          g_custom_name_pool[MAX_CHARACTERS][24];
+static int           g_custom_name_used = 0;
+
+static const Clay_String NEW_HERO_CLASSES[] = {
+    CLAY_STRING_CONST("Wayfarer"),
+    CLAY_STRING_CONST("Knight"),
+    CLAY_STRING_CONST("Stormcaller"),
+    CLAY_STRING_CONST("Shadowblade"),
+    CLAY_STRING_CONST("Beastwarden"),
+};
+#define NEW_HERO_CLASS_COUNT ((int)(sizeof(NEW_HERO_CLASSES)/sizeof(NEW_HERO_CLASSES[0])))
+
+static const Clay_Color NEW_HERO_ACCENTS[] = {
+    { 230, 196, 110, 255 },  // gold
+    { 196,  82,  82, 255 },  // crimson
+    { 110, 196, 230, 255 },  // teal
+    { 168, 142, 220, 255 },  // violet
+    { 156, 220, 122, 255 },  // jade
+};
+#define NEW_HERO_ACCENT_COUNT ((int)(sizeof(NEW_HERO_ACCENTS)/sizeof(NEW_HERO_ACCENTS[0])))
+
+static const Clay_String NEW_HERO_BIO =
+    CLAY_STRING_CONST("Newly forged. Untested. Brave or foolish; the long road will sort which.");
+
+static void EnsureCharactersInitialized(void) {
+    if (g_character_count > 0) return;
+    for (int i = 0; i < PRESET_COUNT; i++) {
+        g_characters[i] = CHARACTER_PRESETS[i];
+    }
+    g_character_count = PRESET_COUNT;
+}
+
+static void HeroFormCommit(AppState *state) {
+    // Trim trailing whitespace
+    while (state->newHeroNameLen > 0 && state->newHeroNameBuf[state->newHeroNameLen - 1] == ' ') {
+        state->newHeroNameBuf[--state->newHeroNameLen] = '\0';
+    }
+    if (state->newHeroNameLen == 0) return;
+    if (g_character_count >= MAX_CHARACTERS) return;
+
+    int slot = g_custom_name_used++;
+    if (slot >= MAX_CHARACTERS) slot = MAX_CHARACTERS - 1;
+    int n = state->newHeroNameLen;
+    if (n > (int)sizeof(g_custom_name_pool[0]) - 1) n = sizeof(g_custom_name_pool[0]) - 1;
+    for (int i = 0; i < n; i++) g_custom_name_pool[slot][i] = state->newHeroNameBuf[i];
+    g_custom_name_pool[slot][n] = '\0';
+
+    int s[4];
+    for (int i = 0; i < 4; i++) s[i] = state->newHeroStats[i];
+
+    CharacterSlot c = {
+        .name = (Clay_String){ .isStaticallyAllocated = false, .length = n, .chars = g_custom_name_pool[slot] },
+        .klass = NEW_HERO_CLASSES[state->newHeroClass],
+        .level = 1,
+        .hp = 100, .hpMax = 100,
+        .mp =  40, .mpMax =  40,
+        .strength = s[0], .dexterity = s[1], .intellect = s[2], .vitality = s[3],
+        .bio = NEW_HERO_BIO,
+        .accent = NEW_HERO_ACCENTS[state->newHeroAccent],
+    };
+    g_characters[g_character_count] = c;
+    state->selectedCharacter = g_character_count;
+    g_character_count++;
+    state->newHeroFormOpen = false;
+}
+
+static void HeroFormConsumeTextInput(AppState *state) {
+    // Backspace: remove the last char
+    if (IsKeyPressed(KEY_BACKSPACE) && state->newHeroNameLen > 0) {
+        state->newHeroNameBuf[--state->newHeroNameLen] = '\0';
+    }
+    // Repeat-fire on hold
+    if (IsKeyDown(KEY_BACKSPACE)) {
+        static float held = 0;
+        held += GetFrameTime();
+        if (held > 0.4f) {
+            held -= 0.05f;
+            if (state->newHeroNameLen > 0) {
+                state->newHeroNameBuf[--state->newHeroNameLen] = '\0';
+            }
+        }
+    }
+    // Typed printable characters
+    int ch;
+    while ((ch = GetCharPressed()) != 0) {
+        if (ch >= 32 && ch < 127 &&
+            state->newHeroNameLen < (int)sizeof(state->newHeroNameBuf) - 1) {
+            state->newHeroNameBuf[state->newHeroNameLen++] = (char)ch;
+            state->newHeroNameBuf[state->newHeroNameLen] = '\0';
+        }
+    }
+}
+
+static void NewHeroForm(AppState *state) {
+    HeroFormConsumeTextInput(state);
+    if (IsKeyPressed(KEY_ESCAPE)) {
+        state->newHeroFormOpen = false;
+        return;
+    }
+
+    Clay_Color chosenAccent = NEW_HERO_ACCENTS[state->newHeroAccent];
+
+    // Dimmed full-screen backdrop, with the card centred
+    CLAY(CLAY_ID("HEROFORM_Overlay"), {
+        .layout = {
+            .sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_GROW(0) },
+            .childAlignment = { CLAY_ALIGN_X_CENTER, CLAY_ALIGN_Y_CENTER },
+        },
+        .backgroundColor = (Clay_Color){ 6, 8, 14, 210 },
+        .floating = {
+            .attachTo = CLAY_ATTACH_TO_ROOT,
+            .zIndex = 20,
+        },
+    }) {
+        CLAY(CLAY_ID("HEROFORM_Card"), {
+            .layout = {
+                .sizing = { CLAY_SIZING_FIXED(560), CLAY_SIZING_FIT(0) },
+                .layoutDirection = CLAY_TOP_TO_BOTTOM,
+                .padding = { 32, 32, 28, 28 },
+                .childGap = 18,
+            },
+            .backgroundColor = COL_BG,
+            .border = { .color = chosenAccent, .width = { .top = 3 } },
+            .cornerRadius = CLAY_CORNER_RADIUS(2),
+        }) {
+            // Header
+            CLAY_AUTO_ID({
+                .layout = {
+                    .sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_FIT(0) },
+                    .layoutDirection = CLAY_TOP_TO_BOTTOM,
+                    .childGap = 4,
+                },
+            }) {
+                CLAY_TEXT(CLAY_STRING("FORGE A NEW HERO"),
+                    CLAY_TEXT_CONFIG({ .fontSize = 24, .letterSpacing = 6, .textColor = chosenAccent }));
+                CLAY_TEXT(CLAY_STRING("a new soul on the long road"),
+                    CLAY_TEXT_CONFIG({ .fontSize = 10, .letterSpacing = 3, .textColor = COL_TEXT_FAINT }));
+            }
+
+            // Name input field
+            CLAY_AUTO_ID({
+                .layout = {
+                    .sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_FIT(0) },
+                    .layoutDirection = CLAY_TOP_TO_BOTTOM,
+                    .childGap = 6,
+                },
+            }) {
+                CLAY_TEXT(CLAY_STRING("NAME"),
+                    CLAY_TEXT_CONFIG({ .fontSize = 10, .letterSpacing = 3, .textColor = COL_TEXT_DIM }));
+                CLAY_AUTO_ID({
+                    .layout = {
+                        .sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_FIXED(36) },
+                        .padding = { 12, 12, 0, 0 },
+                        .childAlignment = { .y = CLAY_ALIGN_Y_CENTER },
+                    },
+                    .backgroundColor = COL_BG_DEEP,
+                    .border = { .color = chosenAccent, .width = { .bottom = 2 } },
+                }) {
+                    bool empty = (state->newHeroNameLen == 0);
+                    int cursorOn = ((int)(state->time * 2.0f)) & 1;
+                    Clay_String shown = empty
+                        ? CLAY_STRING("type a name...")
+                        : (Clay_String){
+                            .isStaticallyAllocated = false,
+                            .length = state->newHeroNameLen,
+                            .chars  = state->newHeroNameBuf,
+                          };
+                    CLAY_TEXT(shown,
+                        CLAY_TEXT_CONFIG({
+                            .fontSize = 16, .letterSpacing = 1,
+                            .textColor = empty ? COL_TEXT_FAINT : COL_TEXT,
+                        }));
+                    if (!empty && cursorOn) {
+                        CLAY_TEXT(CLAY_STRING("_"),
+                            CLAY_TEXT_CONFIG({ .fontSize = 16, .textColor = chosenAccent }));
+                    }
+                }
+            }
+
+            // Class stepper
+            CLAY_AUTO_ID({
+                .layout = {
+                    .sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_FIT(0) },
+                    .childAlignment = { .y = CLAY_ALIGN_Y_CENTER },
+                    .childGap = 14,
+                },
+            }) {
+                CLAY_AUTO_ID({
+                    .layout = { .sizing = { CLAY_SIZING_FIXED(80), CLAY_SIZING_FIT(0) } },
+                }) {
+                    CLAY_TEXT(CLAY_STRING("CLASS"),
+                        CLAY_TEXT_CONFIG({ .fontSize = 10, .letterSpacing = 3, .textColor = COL_TEXT_DIM }));
+                }
+                CLAY(CLAY_ID("HEROFORM_ClassPrev"), {
+                    .layout = {
+                        .sizing = { CLAY_SIZING_FIXED(30), CLAY_SIZING_FIXED(30) },
+                        .childAlignment = { CLAY_ALIGN_X_CENTER, CLAY_ALIGN_Y_CENTER },
+                    },
+                    .backgroundColor = Clay_Hovered() ? chosenAccent : COL_BG_DEEP,
+                    .border = { .color = COL_BORDER, .width = { 1, 1, 1, 1 } },
+                }) {
+                    CLAY_TEXT(CLAY_STRING("<"),
+                        CLAY_TEXT_CONFIG({
+                            .fontSize = 16,
+                            .textColor = Clay_Hovered() ? COL_BG_DEEP : COL_TEXT_DIM,
+                        }));
+                }
+                CLAY_AUTO_ID({
+                    .layout = {
+                        .sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_FIXED(30) },
+                        .childAlignment = { CLAY_ALIGN_X_CENTER, CLAY_ALIGN_Y_CENTER },
+                    },
+                }) {
+                    CLAY_TEXT(NEW_HERO_CLASSES[state->newHeroClass],
+                        CLAY_TEXT_CONFIG({
+                            .fontSize = 16, .letterSpacing = 2,
+                            .textColor = chosenAccent,
+                        }));
+                }
+                CLAY(CLAY_ID("HEROFORM_ClassNext"), {
+                    .layout = {
+                        .sizing = { CLAY_SIZING_FIXED(30), CLAY_SIZING_FIXED(30) },
+                        .childAlignment = { CLAY_ALIGN_X_CENTER, CLAY_ALIGN_Y_CENTER },
+                    },
+                    .backgroundColor = Clay_Hovered() ? chosenAccent : COL_BG_DEEP,
+                    .border = { .color = COL_BORDER, .width = { 1, 1, 1, 1 } },
+                }) {
+                    CLAY_TEXT(CLAY_STRING(">"),
+                        CLAY_TEXT_CONFIG({
+                            .fontSize = 16,
+                            .textColor = Clay_Hovered() ? COL_BG_DEEP : COL_TEXT_DIM,
+                        }));
+                }
+            }
+
+            // Accent colour swatches
+            CLAY_AUTO_ID({
+                .layout = {
+                    .sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_FIT(0) },
+                    .childAlignment = { .y = CLAY_ALIGN_Y_CENTER },
+                    .childGap = 14,
+                },
+            }) {
+                CLAY_AUTO_ID({
+                    .layout = { .sizing = { CLAY_SIZING_FIXED(80), CLAY_SIZING_FIT(0) } },
+                }) {
+                    CLAY_TEXT(CLAY_STRING("ACCENT"),
+                        CLAY_TEXT_CONFIG({ .fontSize = 10, .letterSpacing = 3, .textColor = COL_TEXT_DIM }));
+                }
+                for (int a = 0; a < NEW_HERO_ACCENT_COUNT; a++) {
+                    bool active = (state->newHeroAccent == a);
+                    CLAY(CLAY_IDI("HEROFORM_Accent", a), {
+                        .layout = {
+                            .sizing = { CLAY_SIZING_FIXED(active ? 30 : 26), CLAY_SIZING_FIXED(active ? 30 : 26) },
+                        },
+                        .backgroundColor = NEW_HERO_ACCENTS[a],
+                        .cornerRadius = CLAY_CORNER_RADIUS(active ? 15 : 13),
+                        .border = active
+                            ? (Clay_BorderElementConfig){ .color = COL_TEXT, .width = { 2, 2, 2, 2 } }
+                            : (Clay_BorderElementConfig){ 0 },
+                    }) {}
+                }
+            }
+
+            // Stat steppers
+            CLAY_AUTO_ID({
+                .layout = {
+                    .sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_FIT(0) },
+                    .layoutDirection = CLAY_TOP_TO_BOTTOM,
+                    .childGap = 6,
+                    .padding = { 0, 0, 4, 0 },
+                },
+            }) {
+                CLAY_AUTO_ID({
+                    .layout = {
+                        .sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_FIT(0) },
+                        .childAlignment = { .y = CLAY_ALIGN_Y_CENTER },
+                    },
+                }) {
+                    CLAY_TEXT(CLAY_STRING("STATS"),
+                        CLAY_TEXT_CONFIG({ .fontSize = 10, .letterSpacing = 3, .textColor = COL_TEXT_DIM }));
+                    CLAY_AUTO_ID({ .layout = { .sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_FIXED(1) } } }) {}
+                    int total = state->newHeroStats[0] + state->newHeroStats[1] +
+                                state->newHeroStats[2] + state->newHeroStats[3];
+                    CLAY_TEXT(UI_Fmt("total %d  /  start 40", total),
+                        CLAY_TEXT_CONFIG({ .fontSize = 10, .letterSpacing = 2, .textColor = COL_TEXT_FAINT }));
+                }
+                Clay_String statLabels[4] = {
+                    CLAY_STRING("STR"), CLAY_STRING("DEX"),
+                    CLAY_STRING("INT"), CLAY_STRING("VIT"),
+                };
+                for (int s = 0; s < 4; s++) {
+                    CLAY_AUTO_ID({
+                        .layout = {
+                            .sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_FIXED(32) },
+                            .padding = { 4, 4, 0, 0 },
+                            .childAlignment = { .y = CLAY_ALIGN_Y_CENTER },
+                            .childGap = 10,
+                        },
+                    }) {
+                        CLAY_AUTO_ID({
+                            .layout = { .sizing = { CLAY_SIZING_FIXED(40), CLAY_SIZING_FIT(0) } },
+                        }) {
+                            CLAY_TEXT(statLabels[s],
+                                CLAY_TEXT_CONFIG({ .fontSize = 12, .letterSpacing = 3, .textColor = COL_TEXT_DIM }));
+                        }
+                        CLAY(CLAY_IDI("HEROFORM_StatDec", s), {
+                            .layout = {
+                                .sizing = { CLAY_SIZING_FIXED(26), CLAY_SIZING_FIXED(26) },
+                                .childAlignment = { CLAY_ALIGN_X_CENTER, CLAY_ALIGN_Y_CENTER },
+                            },
+                            .backgroundColor = Clay_Hovered() ? chosenAccent : COL_BG_DEEP,
+                            .border = { .color = COL_BORDER, .width = { 1, 1, 1, 1 } },
+                        }) {
+                            CLAY_TEXT(CLAY_STRING("-"),
+                                CLAY_TEXT_CONFIG({
+                                    .fontSize = 14,
+                                    .textColor = Clay_Hovered() ? COL_BG_DEEP : COL_TEXT_DIM,
+                                }));
+                        }
+                        CLAY_AUTO_ID({
+                            .layout = {
+                                .sizing = { CLAY_SIZING_FIXED(40), CLAY_SIZING_FIT(0) },
+                                .childAlignment = { .x = CLAY_ALIGN_X_CENTER },
+                            },
+                        }) {
+                            CLAY_TEXT(UI_Fmt("%d", state->newHeroStats[s]),
+                                CLAY_TEXT_CONFIG({ .fontSize = 18, .textColor = COL_TEXT }));
+                        }
+                        CLAY(CLAY_IDI("HEROFORM_StatInc", s), {
+                            .layout = {
+                                .sizing = { CLAY_SIZING_FIXED(26), CLAY_SIZING_FIXED(26) },
+                                .childAlignment = { CLAY_ALIGN_X_CENTER, CLAY_ALIGN_Y_CENTER },
+                            },
+                            .backgroundColor = Clay_Hovered() ? chosenAccent : COL_BG_DEEP,
+                            .border = { .color = COL_BORDER, .width = { 1, 1, 1, 1 } },
+                        }) {
+                            CLAY_TEXT(CLAY_STRING("+"),
+                                CLAY_TEXT_CONFIG({
+                                    .fontSize = 14,
+                                    .textColor = Clay_Hovered() ? COL_BG_DEEP : COL_TEXT_DIM,
+                                }));
+                        }
+                        // Mini bar
+                        CLAY_AUTO_ID({
+                            .layout = {
+                                .sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_FIXED(6) },
+                            },
+                            .backgroundColor = COL_BG_DEEP,
+                            .cornerRadius = CLAY_CORNER_RADIUS(2),
+                            .border = { .color = COL_BORDER, .width = { 1, 1, 1, 1 } },
+                        }) {
+                            float pct = (state->newHeroStats[s] - 8) / 12.0f;
+                            if (pct < 0) pct = 0;
+                            if (pct > 1) pct = 1;
+                            CLAY_AUTO_ID({
+                                .layout = { .sizing = { CLAY_SIZING_PERCENT(pct), CLAY_SIZING_GROW(0) } },
+                                .backgroundColor = chosenAccent,
+                                .cornerRadius = CLAY_CORNER_RADIUS(2),
+                            }) {}
+                        }
+                    }
+                }
+            }
+
+            // Divider
+            CLAY_AUTO_ID({
+                .layout = { .sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_FIXED(1) } },
+                .backgroundColor = COL_BORDER,
+            }) {}
+
+            // Buttons
+            CLAY_AUTO_ID({
+                .layout = {
+                    .sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_FIT(0) },
+                    .childGap = 12,
+                    .childAlignment = { .y = CLAY_ALIGN_Y_CENTER },
+                },
+            }) {
+                CLAY(CLAY_ID("HEROFORM_Cancel"), {
+                    .layout = {
+                        .sizing = { CLAY_SIZING_FIXED(120), CLAY_SIZING_FIXED(38) },
+                        .childAlignment = { CLAY_ALIGN_X_CENTER, CLAY_ALIGN_Y_CENTER },
+                    },
+                    .backgroundColor = Clay_Hovered() ? COL_PANEL_HOVER : COL_BG,
+                    .border = { .color = COL_BORDER, .width = { 1, 1, 1, 1 } },
+                }) {
+                    CLAY_TEXT(CLAY_STRING("CANCEL"),
+                        CLAY_TEXT_CONFIG({ .fontSize = 12, .letterSpacing = 4, .textColor = COL_TEXT_DIM }));
+                }
+                CLAY_AUTO_ID({ .layout = { .sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_FIXED(1) } } }) {}
+                bool canForge = (state->newHeroNameLen > 0);
+                CLAY(CLAY_ID("HEROFORM_Forge"), {
+                    .layout = {
+                        .sizing = { CLAY_SIZING_FIXED(220), CLAY_SIZING_FIXED(38) },
+                        .childAlignment = { CLAY_ALIGN_X_CENTER, CLAY_ALIGN_Y_CENTER },
+                    },
+                    .backgroundColor = !canForge
+                        ? COL_BG
+                        : (Clay_Hovered() ? chosenAccent : NEW_HERO_ACCENTS[state->newHeroAccent]),
+                    .border = { .color = canForge ? chosenAccent : COL_BORDER, .width = { 1, 1, 1, 1 } },
+                }) {
+                    CLAY_TEXT(CLAY_STRING("FORGE THE HERO  >"),
+                        CLAY_TEXT_CONFIG({
+                            .fontSize = 13, .letterSpacing = 4,
+                            .textColor = canForge ? COL_BG_DEEP : COL_TEXT_FAINT,
+                        }));
+                }
+            }
+        }
+    }
+
+    // Form-level click handling
+    if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+        if (Clay_PointerOver(CLAY_ID("HEROFORM_Cancel"))) {
+            state->newHeroFormOpen = false;
+            return;
+        }
+        if (Clay_PointerOver(CLAY_ID("HEROFORM_Forge"))) {
+            HeroFormCommit(state);
+            return;
+        }
+        if (Clay_PointerOver(CLAY_ID("HEROFORM_ClassPrev"))) {
+            state->newHeroClass =
+                (state->newHeroClass - 1 + NEW_HERO_CLASS_COUNT) % NEW_HERO_CLASS_COUNT;
+        }
+        if (Clay_PointerOver(CLAY_ID("HEROFORM_ClassNext"))) {
+            state->newHeroClass = (state->newHeroClass + 1) % NEW_HERO_CLASS_COUNT;
+        }
+        for (int a = 0; a < NEW_HERO_ACCENT_COUNT; a++) {
+            if (Clay_PointerOver(CLAY_IDI("HEROFORM_Accent", a))) {
+                state->newHeroAccent = a;
+                break;
+            }
+        }
+        for (int s = 0; s < 4; s++) {
+            if (Clay_PointerOver(CLAY_IDI("HEROFORM_StatDec", s))) {
+                if (state->newHeroStats[s] > 8) state->newHeroStats[s]--;
+            }
+            if (Clay_PointerOver(CLAY_IDI("HEROFORM_StatInc", s))) {
+                if (state->newHeroStats[s] < 20) state->newHeroStats[s]++;
+            }
+        }
+    }
+}
 
 void Scene_Character(AppState *state) {
-    if (state->selectedCharacter < 0 || state->selectedCharacter >= CHAR_COUNT) {
+    EnsureCharactersInitialized();
+    if (state->selectedCharacter < 0 || state->selectedCharacter >= g_character_count) {
         state->selectedCharacter = 0;
     }
-    const CharacterSlot *sel = &CHARACTERS[state->selectedCharacter];
+    const CharacterSlot *sel = &g_characters[state->selectedCharacter];
 
     CLAY(CLAY_ID("CH_Root"), {
         .layout = {
@@ -246,7 +696,7 @@ void Scene_Character(AppState *state) {
             CLAY_TEXT(CLAY_STRING("CHOOSE YOUR HERO"),
                 CLAY_TEXT_CONFIG({ .fontSize = 26, .letterSpacing = 6, .textColor = COL_ACCENT }));
             CLAY_AUTO_ID({ .layout = { .sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_FIXED(1) } } }) {}
-            CLAY_TEXT(UI_Fmt("slot %d of %d", state->selectedCharacter + 1, CHAR_COUNT),
+            CLAY_TEXT(UI_Fmt("slot %d of %d", state->selectedCharacter + 1, g_character_count),
                 CLAY_TEXT_CONFIG({ .fontSize = 12, .letterSpacing = 2, .textColor = COL_TEXT_FAINT }));
         }
         CLAY_AUTO_ID({
@@ -269,8 +719,8 @@ void Scene_Character(AppState *state) {
                     .childGap = 10,
                 },
             }) {
-                for (int i = 0; i < CHAR_COUNT; i++) {
-                    const CharacterSlot *c = &CHARACTERS[i];
+                for (int i = 0; i < g_character_count; i++) {
+                    const CharacterSlot *c = &g_characters[i];
                     bool active = (state->selectedCharacter == i);
                     Clay_ElementId id = CLAY_IDI("CH_Card", i);
                     CLAY(id, {
@@ -476,14 +926,27 @@ void Scene_Character(AppState *state) {
         }
     }
 
-    // Click handling: switch selection when a card is hovered+pressed
-    if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
-        for (int i = 0; i < CHAR_COUNT; i++) {
+    // Click handling for the main grid (only when the form isn't open)
+    if (!state->newHeroFormOpen && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+        for (int i = 0; i < g_character_count; i++) {
             if (Clay_PointerOver(CLAY_IDI("CH_Card", i))) {
                 state->selectedCharacter = i;
                 break;
             }
         }
+        if (Clay_PointerOver(CLAY_ID("CH_NewSlot")) && g_character_count < MAX_CHARACTERS) {
+            state->newHeroFormOpen   = true;
+            state->newHeroNameLen    = 0;
+            state->newHeroNameBuf[0] = '\0';
+            state->newHeroClass      = 0;
+            state->newHeroAccent     = 0;
+            state->newHeroStats[0] = state->newHeroStats[1] =
+            state->newHeroStats[2] = state->newHeroStats[3] = 10;
+        }
+    }
+
+    if (state->newHeroFormOpen) {
+        NewHeroForm(state);
     }
 }
 

@@ -30,6 +30,14 @@ typedef struct {
     int inventoryFilter;       // 0=ALL 1=WEAPONS 2=ARMOR 3=CONSUM 4=QUEST 5=MISC
     SettingsTab settingsTab;
 
+    // New-hero form state
+    bool newHeroFormOpen;
+    char newHeroNameBuf[24];
+    int  newHeroNameLen;
+    int  newHeroClass;
+    int  newHeroStats[4];      // STR, DEX, INT, VIT
+    int  newHeroAccent;
+
     float musicVolume;
     float sfxVolume;
     float masterVolume;
